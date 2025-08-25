@@ -31,11 +31,13 @@ async def handle_ConnectMessage_BattleServer(reader, writer, message):
     for game in gameManager.active_games:
         for player in game.players:
             if player["id"] == message["id"]:
+                print("Joining created game")
                 game_already_created = True
                 writer.game = game
                 game.writers.append(writer)
                 break
     if not game_already_created:
+        print("Creating game")
         writer.game = gameManager.Game(reader, writer, [
             {
                 "id": "sgid_04010210b1e184bc",

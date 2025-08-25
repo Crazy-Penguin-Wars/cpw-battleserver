@@ -33,7 +33,9 @@ MESSAGES = {
     4: echo_message,
     5: echo_message,
     18: handle_PurchaseMessage,
-    33: echo_message
+    33: echo_message,
+    20: echo_message,
+    60: echo_message
 }
 
 async def handle_connection(reader, writer):

@@ -21,8 +21,9 @@ async def send_message_to_multiple_writers(message, writers):
     length_prefix = struct.pack('>I', len(encrypted_bytes))  # big-endian unsigned int
     # 4. Send to client
     for writer in writers:
-        writer.write(length_prefix + encrypted_bytes)
-    await writer.drain()
+        if not writer.is_closing():
+            writer.write(length_prefix + encrypted_bytes)
+            await writer.drain()
 
 async def send_message(message, writer):
     message_str = json.dumps(message)
@@ -32,5 +33,6 @@ async def send_message(message, writer):
     # Prefix with 4-byte length
     length_prefix = struct.pack('>I', len(encrypted_bytes))  # big-endian unsigned int
     # 4. Send to client
-    writer.write(length_prefix + encrypted_bytes)
-    await writer.drain()
+    if not writer.is_closing():
+        writer.write(length_prefix + encrypted_bytes)
+        await writer.drain()
