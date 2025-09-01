@@ -16,6 +16,8 @@ class Game:
         self.playerOrder = []
         self.currentPlayerTurn = 0
         self.disconnectingQueue = []
+        self.respawnQueue = []
+        self.resumeQueue = []
         self.amountRealPlayers = 0
         self.amountRealPlayersActive = 0
         self.amountAllPlayers = len(players)
@@ -114,13 +116,17 @@ class Game:
             response = {"t": 22, "removed_client": userId, "reason": "disconnected"}
             await socketUtils.send_message_to_multiple_writers(response, self.writers) 
 
+    def addPlayerToRespawnQueue(self, player):
+        self.respawnQueue.append(player)
+        self.resumeQueue.append(player)
+
 async def update():
-     #print("Active games: " + str(len(active_games)))
      for game in active_games:
+        response = {"t": 1}
+
         # Check for inactive players
         if game.gameStarted:
             for writer in game.writers:
-                #print(len(game.writers))
                 if writer.is_closing():
                     await game.disconnectPlayer(writer)
         
@@ -129,8 +135,8 @@ async def update():
         if len(game.disconnectingQueue) != 0 and game.playersReady == game.amountRealPlayersActive:
             for disconnecting_player in game.disconnectingQueue:
                 # Send RemovePlayer
-                response = {"t": 22, "removed_client": disconnecting_player, "reason": "disconnected"}
-                await socketUtils.send_message_to_multiple_writers(response, game.writers) 
+                disconnectMessage = {"t": 22, "removed_client": disconnecting_player, "reason": "disconnected"}
+                await socketUtils.send_message_to_multiple_writers(disconnectMessage, game.writers) 
                 # Reasons:
                 # unexpected_message, disconnected, sync_error, time_out
                 game.disconnectingQueue.remove(disconnecting_player)
@@ -139,8 +145,29 @@ async def update():
         current_time = time.time() * 1000
         time_diff = current_time - game.lastWorldUpdate
         game.lastWorldUpdate = current_time
+
+        # Check respawnQueue
+        for respawning_player in game.respawnQueue:
+            if respawning_player["respawn_time"] < current_time:
+                if "respawn" not in response:
+                    response["respawn"] = []
+                response["respawn"].append(respawning_player)
+                game.respawnQueue.remove(respawning_player)
+
+                print("RESPAWN")
+                print(response)
+
+        for resuming_player in game.resumeQueue:
+            if resuming_player["resume_time"] < current_time:
+                if "resume" not in response:
+                    response["resume"] = []
+                response["resume"].append(resuming_player)
+                game.resumeQueue.remove(resuming_player)
+
+                print("RESUME")
+                print(response)
+
         if game.gameStarted and game.turnTimeLeft > 0:
-            response = {"t": 1}
 
             game.turnTimeLeft = round(game.turnTimeLeft - time_diff)
             game.matchTimeLeft = round(game.matchTimeLeft - time_diff)
@@ -150,7 +177,9 @@ async def update():
             response["id"] = "sgid_04010210b1e184bc"
 
             if game.matchTimeLeft <= 0:
-                response = {"t": 19}
+                MatchEndMessage = {"t": 19}
+                await socketUtils.send_message_to_multiple_writers(MatchEndMessage, game.writers)
+                return
 
             elif game.turnTimeLeft <= 0:
                 print("[Debug] Start new turn")
@@ -162,7 +191,9 @@ async def update():
                 game.turnStarted = False
 
                 # Send end turn message
-                response = {"t": 16, "id": game.playerOrder[game.currentPlayerTurn]}
+                EndTurnMessage = {"t": 16, "id": game.playerOrder[game.currentPlayerTurn]}
+                await socketUtils.send_message_to_multiple_writers(EndTurnMessage, game.writers)
                 game.currentPlayerTurn = (game.currentPlayerTurn + 1) % game.amountAllPlayersActive
 
+        if game.gameStarted:
             await socketUtils.send_message_to_multiple_writers(response, game.writers)
