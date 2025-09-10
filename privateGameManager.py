@@ -17,7 +17,7 @@ def get_waiting_room(game_name):
     return -1
 
 
-class WaitingRoom:
+class PrivateWaitingRoom:
 
     def __init__(self, writer, player, game_name):
         self.writers = []

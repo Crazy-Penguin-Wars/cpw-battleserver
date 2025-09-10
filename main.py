@@ -1,6 +1,7 @@
 import asyncio
 import json
 import struct
+import findGameManager
 import gameManager
 from messages import *
 import privateGameManager
@@ -21,7 +22,7 @@ MESSAGES = {
     26: handle_ConnectMessage_BattleServer,
     15: handle_ClientReadyMessage,
     8: echo_message,
-    14: echo_message,
+    14: handle_HistoryMessage,
     7: echo_message,
     13: echo_message,
     3: echo_message,
@@ -138,11 +139,17 @@ async def updateWaitingRooms():
         await privateGameManager.update()
         await asyncio.sleep(1)
 
+async def updateMatchmaking():
+    while True:
+        await findGameManager.update()
+        await asyncio.sleep(1)
+
 async def main():
     server = await asyncio.start_server(handle_connection, '0.0.0.0', 5050)
 
     asyncio.create_task(updateWorld())
     asyncio.create_task(updateWaitingRooms())
+    asyncio.create_task(updateMatchmaking())
 
     async with server:
         print("TCP server running on port 5050")

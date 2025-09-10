@@ -1,15 +1,19 @@
-import random
+import aiohttp
+import json
+import os
+from dotenv import load_dotenv
 import socketUtils
 import time
+import base64
+
+load_dotenv()
 
 active_games = []
 
 class Game:
 
-    def __init__(self, reader, writer, players):
-        self.reader = reader
+    def __init__(self, players, match_time, turn_time, seed):
         self.writers = []
-        self.writers.append(writer)
 
         self.players = players
         self.playersActive = players
@@ -25,18 +29,30 @@ class Game:
         self.playersReady = 0
         self.gameStarted = False
         self.turnStarted = False
+        self.rewards = {}
         for player in players:
             player["ready"] = False
             if "FakePlayer" not in player["id"]:
                  self.amountRealPlayers += 1
                  self.amountRealPlayersActive += 1
             self.playerOrder.append(player["id"])
+            self.rewards[player["id"]] = {
+                "coins": 0,
+                "cash": 0,
+                "experience": 0,
+                "score": 0,
+                "usedItems": {},
+                "earnedItems": {}
+            }
 
         #random.shuffle(self.playerOrder)
         print(self.playerOrder)
 
-        self.turnTimeLeft = 20000
-        self.matchTimeLeft = 300000
+        self.seed = seed
+        self.turnTime = turn_time
+        self.matchTime = match_time
+        self.turnTimeLeft = self.turnTime * 1000
+        self.matchTimeLeft = self.matchTime * 1000
         self.lastWorldUpdate = time.time() * 1000
 
     async def playerReady(self, player_id):
@@ -56,7 +72,7 @@ class Game:
                 await socketUtils.send_message_to_multiple_writers(response, self.writers)
 
                 self.gameStarted = True
-                self.turnTimeLeft = 20000
+                self.turnTimeLeft = self.turnTime * 1000
                 self.turnStarted = True
 
     async def disconnectPlayer(self, writer):
@@ -120,6 +136,59 @@ class Game:
         self.respawnQueue.append(player)
         self.resumeQueue.append(player)
 
+    def add_reward(self, id, type, value):
+        if "FakePlayer" in id:
+            return
+        match type:
+            case "coins" | "cash" | "experience" | "score":
+                self.rewards[id][type] = value # Do not add, the game sends the total amount
+            case "usedItems" | "earnedItems":
+                key = list(value.keys())[0]
+                if key not in self.rewards[id][type]:
+                    self.rewards[id][type][key] = 0
+                self.rewards[id][type][key] += value[key]
+            # don't care about the other cases
+
+    def sort_players(self):
+        # Sort by score first, then by coins, then by experience, then sort the IDs alphabetically
+        return [k for k, v in sorted(self.rewards.items(), key=lambda x: (-x[1]['score'], -x[1]['coins'], -x[1]['experience'], x[0]))]
+
+
+    def add_position_bonus_reward(self, id, players_sorted):
+        print(f"ID: {id}")
+        print(f"PLAYERS SORTED: {players_sorted}")
+        # Values from config:
+        rank_multipliers = [1, 1, 1, 1]
+        exp_modifier = 1
+        coins_modifier = 1
+
+        rank = players_sorted.index(id) + 1 + (4 - self.amountRealPlayersActive)
+        print(f"RANK: {rank}")
+
+        multiplier = rank_multipliers[rank - 1]
+
+        def calculate_bonus(modifier):
+            print(f"NOT ROUNDED: {((self.rewards[id]["score"] - self.rewards[players_sorted[-1]]["score"]) * 0.25 + modifier) * multiplier}")
+            return int(((self.rewards[id]["score"] - self.rewards[players_sorted[-1]]["score"]) * 0.25 + modifier) * multiplier)
+        
+        print(f"COIN BONUS: {calculate_bonus(coins_modifier)}")
+        print(f"XP BONUS: {calculate_bonus(exp_modifier)}")
+        self.rewards[id]["coins"] += calculate_bonus(coins_modifier)
+        self.rewards[id]["experience"] += calculate_bonus(exp_modifier)
+        print(f"COIN TOTAL: {self.rewards[id]["coins"]}")
+        print(f"XP TOTAL: {self.rewards[id]["experience"]}")
+
+    async def send_rewards_to_main_server(self):
+        rewards_string = json.dumps(self.rewards)
+        rewards_base64 = base64.urlsafe_b64encode(rewards_string.encode("utf-8")).decode("utf-8")
+        url = "http://127.0.0.1:5055/update-rewards"
+        params = {
+            "rewards": rewards_base64,
+            "connectionKey": os.environ["CONNECTION_KEY"]
+        }
+        async with aiohttp.ClientSession() as session:
+            await session.post(url, params=params)
+
 async def update():
      for game in active_games:
         response = {"t": 1}
@@ -154,18 +223,12 @@ async def update():
                 response["respawn"].append(respawning_player)
                 game.respawnQueue.remove(respawning_player)
 
-                print("RESPAWN")
-                print(response)
-
         for resuming_player in game.resumeQueue:
             if resuming_player["resume_time"] < current_time:
                 if "resume" not in response:
                     response["resume"] = []
                 response["resume"].append(resuming_player)
                 game.resumeQueue.remove(resuming_player)
-
-                print("RESUME")
-                print(response)
 
         if game.gameStarted and game.turnTimeLeft > 0:
 
@@ -174,11 +237,19 @@ async def update():
 
             response["ttl"] = game.turnTimeLeft
             response["mtl"] = game.matchTimeLeft
-            response["id"] = "sgid_04010210b1e184bc"
 
             if game.matchTimeLeft <= 0:
+                game.gameStarted = False
+                # Send MatchEnd message
                 MatchEndMessage = {"t": 19}
                 await socketUtils.send_message_to_multiple_writers(MatchEndMessage, game.writers)
+                # Add position bonus rewards
+                sorted_players = game.sort_players()
+                for player in game.players:
+                    if "FakePlayer" not in player["id"]:
+                        game.add_position_bonus_reward(player["id"], sorted_players)
+                # Send rewards to the main server (where they'll be added to the database)
+                await game.send_rewards_to_main_server()
                 return
 
             elif game.turnTimeLeft <= 0:

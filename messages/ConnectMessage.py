@@ -1,31 +1,20 @@
+import aiohttp
 import gameManager
 import privateGameManager
+import findGameManager
 
 async def handle_ConnectMessage_MatchMaker(reader, writer, message):
     if message["game_type"] == 1: # Normal game
-        return {
-            "t" : 27,
-            "id": message["id"],
-            "address": "127.0.0.1",
-            "port": 5050,
-            "map": "test_level",
-            "battle_time": 300,
-            "turn_time": 20,
-            "seed": 10,
-            "practice_mode": False,
-            "players": [
-                {
-                    "id": "sgid_04010210b1e184bc",
-                    "name": "Michielvde",
-                    "level": 98
-                },
-                {
-                    "id": "sgid_2",
-                    "name": "Test",
-                    "level": 98
-                }
-            ]
-        }
+        # Request player data from main server
+        url = "http://127.0.0.1:5055/get-player-data"
+        params = {"key": message["key"]}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params) as response:
+                player = await response.json()
+
+        findGameManager.add_new_player_to_matchmaking(player, writer)
+        writer.userId = message["id"]
     elif message["game_type"] == 2 and message["owner"]: # Private game, host
         game_name = message["game_name"]
         extra_number = 1
@@ -41,7 +30,7 @@ async def handle_ConnectMessage_MatchMaker(reader, writer, message):
                     "worn_items": []
                 }
 
-        writer.waiting_room = privateGameManager.WaitingRoom(writer, player, game_name)
+        writer.waiting_room = privateGameManager.PrivateWaitingRoom(writer, player, game_name)
         writer.userId = message["id"]
         privateGameManager.waiting_rooms.append(writer.waiting_room)
 
@@ -75,49 +64,21 @@ async def handle_ConnectMessage_MatchMaker(reader, writer, message):
 
 
 async def handle_ConnectMessage_BattleServer(reader, writer, message):
-    game_already_created = False
     writer.userId = message["id"]
     for game in gameManager.active_games:
         for player in game.players:
             if player["id"] == message["id"]:
                 print("Joining created game")
-                game_already_created = True
                 writer.game = game
                 game.writers.append(writer)
                 break
-    if not game_already_created:
-        print("Creating game")
-        writer.game = gameManager.Game(reader, writer, [
-            {
-                "id": "sgid_04010210b1e184bc",
-                "name": "Michielvde",
-                "level": 98
-            },
-            {
-                "id": "sgid_2",
-                "name": "Test",
-                "level": 98
-            }
-        ])
-        gameManager.active_games.append(writer.game)
     return {
     "t" : 21,
     "id": message["id"],
     "map": "test_level",
-    "battle_time": 300,
-    "turn_time": 20,
-    "seed": 10,
+    "battle_time": game.matchTime,
+    "turn_time": game.turnTime,
+    "seed": game.seed,
     "practice_mode": False,
-    "players": [
-        {
-            "id": "sgid_04010210b1e184bc",
-            "name": "Michielvde",
-            "level": 98
-        },
-        {
-            "id": "sgid_2",
-            "name": "Test",
-            "level": 98
-        }
-    ]
+    "players": game.players
 }
