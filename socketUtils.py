@@ -1,3 +1,4 @@
+import asyncio
 import json
 import struct
 
@@ -20,10 +21,7 @@ async def send_message_to_multiple_writers(message, writers):
     # Prefix with 4-byte length
     length_prefix = struct.pack('>I', len(encrypted_bytes))  # big-endian unsigned int
     # 4. Send to client
-    for writer in writers:
-        if not writer.is_closing():
-            writer.write(length_prefix + encrypted_bytes)
-            await writer.drain()
+    await asyncio.gather(*(send_message(message, writer) for writer in writers))
 
 async def send_message(message, writer):
     message_str = json.dumps(message)

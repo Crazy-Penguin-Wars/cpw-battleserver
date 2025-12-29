@@ -1,3 +1,5 @@
+import asyncio
+import uuid
 import aiohttp
 import json
 import os
@@ -10,9 +12,15 @@ load_dotenv()
 
 active_games = []
 
+async def updateWorld(game):
+    while not game.destroyed:
+        await update(game)
+        await asyncio.sleep(0.0333)
+
 class Game:
 
     def __init__(self, players, match_time, turn_time, seed):
+        # Setup data
         self.writers = []
 
         self.players = players
@@ -29,6 +37,7 @@ class Game:
         self.playersReady = 0
         self.gameStarted = False
         self.turnStarted = False
+        self.destroyed = False
         self.rewards = {}
         for player in players:
             player["ready"] = False
@@ -45,7 +54,6 @@ class Game:
                 "earnedItems": {}
             }
 
-        #random.shuffle(self.playerOrder)
         print(self.playerOrder)
 
         self.seed = seed
@@ -54,6 +62,15 @@ class Game:
         self.turnTimeLeft = self.turnTime * 1000
         self.matchTimeLeft = self.matchTime * 1000
         self.lastWorldUpdate = time.time() * 1000
+
+        # Rematch
+        self.readyClients = []
+        self.pendingClients = []
+        self.leftClients = []
+        self.rematchStarted = False
+
+        # Setup update()
+        asyncio.create_task(updateWorld(self))
 
     async def playerReady(self, player_id):
         print("Player ready")
@@ -78,63 +95,85 @@ class Game:
     async def disconnectPlayer(self, writer):
         userId = writer.userId
 
+        print("Disconnecting player " + userId)
+
+        # Remove player from writers
+        self.writers.remove(writer)
+
+        if self.amountRealPlayersActive == 1:
+            # All players left, end game
+            print("Destroy game")
+            self.destroyed = True
+            active_games.remove(self)
+            return
+        
+        # Check if player already left
         already_left = True
         for player in self.playersActive:
              if player["id"] == userId:
                  already_left = False
                  break
-        
         if already_left:
             return
-
-        print("Disconnecting player " + userId)
-
-        if self.amountRealPlayersActive == 1:
-            # All players left, end game
-            print("Destroy game")
-            active_games.remove(self)
-            return
-
-        # Start next turn if needed
-        next_turn_needed = False
-        if self.playerOrder[self.currentPlayerTurn] == userId:
-            self.currentPlayerTurn = (self.currentPlayerTurn + 1) % self.amountAllPlayersActive
-            next_turn_needed = True
-
-        # Remove player from active players
+        
         self.amountRealPlayersActive -= 1
         self.amountAllPlayersActive -= 1
-        current_turn_id = self.playerOrder[self.currentPlayerTurn]
-        self.playerOrder.remove(userId)
-        # Be sure that the currently active player didn't change
-        self.currentPlayerTurn = self.playerOrder.index(current_turn_id)
+
         for player in self.playersActive:
             if player["id"] == userId:
                 del player
                 break
 
-        # Remove player from writers
-        self.writers.remove(writer)
-        
-        # Send end turn first
-        if next_turn_needed:
-            self.disconnectingQueue.append(userId)
-            # Set all players as not ready
-            for player in self.players:
-                player["ready"] = False
-            self.playersReady = 0
+        # Game still active
+        if self.gameStarted and self.matchTimeLeft > 0:
+            # Start next turn if needed
+            next_turn_needed = False
+            if self.playerOrder[self.currentPlayerTurn] == userId:
+                self.currentPlayerTurn = (self.currentPlayerTurn + 1) % self.amountAllPlayersActive
+                next_turn_needed = True
 
-            self.turnStarted = False
-            response = {"t": 16, "id": userId}
-            await socketUtils.send_message_to_multiple_writers(response, self.writers)
-        else:
-            # Do not use queue and remove player immediately
-            response = {"t": 22, "removed_client": userId, "reason": "disconnected"}
-            await socketUtils.send_message_to_multiple_writers(response, self.writers) 
+            # Remove player from active players
+            current_turn_id = self.playerOrder[self.currentPlayerTurn]
+            self.playerOrder.remove(userId)
+            # Be sure that the currently active player didn't change
+            self.currentPlayerTurn = self.playerOrder.index(current_turn_id)
+
+            # Send end turn first
+            if next_turn_needed:
+                self.disconnectingQueue.append(userId)
+                # Set all players as not ready
+                for player in self.players:
+                    player["ready"] = False
+                self.playersReady = 0
+
+                self.turnStarted = False
+                response = {"t": 16, "id": userId}
+                await socketUtils.send_message_to_multiple_writers(response, self.writers)
+            else:
+                # Do not use queue and remove player immediately
+                response = {"t": 22, "removed_client": userId, "reason": "disconnected"}
+                await socketUtils.send_message_to_multiple_writers(response, self.writers)
+        
+        # Handle rematches
+        elif self.matchTimeLeft <= 0:
+            self.leftClients.append(userId)
+            if userId in self.readyClients:
+                self.readyClients.remove(userId)
+            if userId in self.pendingClients:
+                self.pendingClients.remove(userId)
+
+            message = {"t" : 41, "id": userId, "ready_clients": self.readyClients, "pending_clients": self.pendingClients, "left_clients": self.leftClients, "start": False, "game_identifier": ""}
+            await socketUtils.send_message_to_multiple_writers(message, self.writers)
 
     def addPlayerToRespawnQueue(self, player):
         self.respawnQueue.append(player)
         self.resumeQueue.append(player)
+
+    async def requestRematch(self, id):
+        self.readyClients.append(id)
+        self.pendingClients.remove(id)
+        message = {"t" : 41, "id": id, "ready_clients": self.readyClients, "pending_clients": self.pendingClients, "left_clients": self.leftClients, "start": False, "game_identifier": ""}
+        await socketUtils.send_message_to_multiple_writers(message, self.writers)
 
     def add_reward(self, id, type, value):
         if "FakePlayer" in id:
@@ -189,82 +228,94 @@ class Game:
         async with aiohttp.ClientSession() as session:
             await session.post(url, params=params)
 
-async def update():
-     for game in active_games:
-        response = {"t": 1}
+async def update(game):
+    response = {"t": 1}
 
-        # Check for inactive players
-        if game.gameStarted:
-            for writer in game.writers:
-                if writer.is_closing():
-                    await game.disconnectPlayer(writer)
-        
+    # Check for inactive players
+    if game.gameStarted:
+        for writer in game.writers:
+            if writer.is_closing():
+                await game.disconnectPlayer(writer)
+    
 
-        # Check disconnectionQueue
-        if len(game.disconnectingQueue) != 0 and game.playersReady == game.amountRealPlayersActive:
-            for disconnecting_player in game.disconnectingQueue:
-                # Send RemovePlayer
-                disconnectMessage = {"t": 22, "removed_client": disconnecting_player, "reason": "disconnected"}
-                await socketUtils.send_message_to_multiple_writers(disconnectMessage, game.writers) 
-                # Reasons:
-                # unexpected_message, disconnected, sync_error, time_out
-                game.disconnectingQueue.remove(disconnecting_player)
+    # Check disconnectionQueue
+    if len(game.disconnectingQueue) != 0 and game.playersReady == game.amountRealPlayersActive:
+        for disconnecting_player in game.disconnectingQueue:
+            # Send RemovePlayer
+            disconnectMessage = {"t": 22, "removed_client": disconnecting_player, "reason": "disconnected"}
+            await socketUtils.send_message_to_multiple_writers(disconnectMessage, game.writers) 
+            # Reasons:
+            # unexpected_message, disconnected, sync_error, time_out
+            game.disconnectingQueue.remove(disconnecting_player)
 
 
-        current_time = time.time() * 1000
-        time_diff = current_time - game.lastWorldUpdate
-        game.lastWorldUpdate = current_time
+    current_time = time.time() * 1000
+    time_diff = current_time - game.lastWorldUpdate
+    game.lastWorldUpdate = current_time
 
-        # Check respawnQueue
-        for respawning_player in game.respawnQueue:
-            if respawning_player["respawn_time"] < current_time:
-                if "respawn" not in response:
-                    response["respawn"] = []
-                response["respawn"].append(respawning_player)
-                game.respawnQueue.remove(respawning_player)
+    # Check respawnQueue
+    for respawning_player in game.respawnQueue:
+        if respawning_player["respawn_time"] < current_time:
+            if "respawn" not in response:
+                response["respawn"] = []
+            response["respawn"].append(respawning_player)
+            game.respawnQueue.remove(respawning_player)
 
-        for resuming_player in game.resumeQueue:
-            if resuming_player["resume_time"] < current_time:
-                if "resume" not in response:
-                    response["resume"] = []
-                response["resume"].append(resuming_player)
-                game.resumeQueue.remove(resuming_player)
+    for resuming_player in game.resumeQueue:
+        if resuming_player["resume_time"] < current_time:
+            if "resume" not in response:
+                response["resume"] = []
+            response["resume"].append(resuming_player)
+            game.resumeQueue.remove(resuming_player)
 
-        if game.gameStarted and game.turnTimeLeft > 0:
+    # Checking for starting rematch
+    if not game.gameStarted and game.matchTimeLeft <= 0:
+        game.matchTimeLeft = round(game.matchTimeLeft - time_diff)
+        if not game.rematchStarted:
+            if len(game.pendingClients) == 0:
+                if len(game.readyClients) > 0:
+                    message = {"t" : 41, "ready_clients": game.readyClients, "pending_clients": game.pendingClients, "left_clients": game.leftClients, "start": True, "game_identifier": "REMATCH:" + str(uuid.uuid4())}
+                    await socketUtils.send_message_to_multiple_writers(message, game.writers)
+                    game.rematchStarted = True
 
-            game.turnTimeLeft = round(game.turnTimeLeft - time_diff)
-            game.matchTimeLeft = round(game.matchTimeLeft - time_diff)
+    if game.gameStarted and game.turnTimeLeft > 0:
 
-            response["ttl"] = game.turnTimeLeft
-            response["mtl"] = game.matchTimeLeft
+        game.turnTimeLeft = round(game.turnTimeLeft - time_diff)
+        game.matchTimeLeft = round(game.matchTimeLeft - time_diff)
 
-            if game.matchTimeLeft <= 0:
-                game.gameStarted = False
-                # Send MatchEnd message
-                MatchEndMessage = {"t": 19}
-                await socketUtils.send_message_to_multiple_writers(MatchEndMessage, game.writers)
-                # Add position bonus rewards
-                sorted_players = game.sort_players()
-                for player in game.players:
-                    if "FakePlayer" not in player["id"]:
-                        game.add_position_bonus_reward(player["id"], sorted_players)
-                # Send rewards to the main server (where they'll be added to the database)
-                await game.send_rewards_to_main_server()
-                return
+        response["ttl"] = game.turnTimeLeft
+        response["mtl"] = game.matchTimeLeft
 
-            elif game.turnTimeLeft <= 0:
-                print("[Debug] Start new turn")
-                # Set all players as not ready
-                for player in game.players:
-                    player["ready"] = False
-                game.playersReady = 0
+        if game.matchTimeLeft <= 0:
+            game.gameStarted = False
+            # Prepare rematch lists
+            game.pendingClients = [x["id"] for x in game.playersActive]
+            game.leftClients = [x["id"] for x in game.players if x["id"] not in game.pendingClients]
+            # Send MatchEnd message
+            MatchEndMessage = {"t": 19}
+            await socketUtils.send_message_to_multiple_writers(MatchEndMessage, game.writers)
+            # Add position bonus rewards
+            sorted_players = game.sort_players()
+            for player in game.players:
+                if "FakePlayer" not in player["id"]:
+                    game.add_position_bonus_reward(player["id"], sorted_players)
+            # Send rewards to the main server (where they'll be added to the database)
+            await game.send_rewards_to_main_server()
+            return
 
-                game.turnStarted = False
+        elif game.turnTimeLeft <= 0:
+            print("[Debug] Start new turn")
+            # Set all players as not ready
+            for player in game.players:
+                player["ready"] = False
+            game.playersReady = 0
 
-                # Send end turn message
-                EndTurnMessage = {"t": 16, "id": game.playerOrder[game.currentPlayerTurn]}
-                await socketUtils.send_message_to_multiple_writers(EndTurnMessage, game.writers)
-                game.currentPlayerTurn = (game.currentPlayerTurn + 1) % game.amountAllPlayersActive
+            game.turnStarted = False
 
-        if game.gameStarted:
-            await socketUtils.send_message_to_multiple_writers(response, game.writers)
+            # Send end turn message
+            EndTurnMessage = {"t": 16, "id": game.playerOrder[game.currentPlayerTurn]}
+            await socketUtils.send_message_to_multiple_writers(EndTurnMessage, game.writers)
+            game.currentPlayerTurn = (game.currentPlayerTurn + 1) % game.amountAllPlayersActive
+
+    if game.gameStarted:
+        await socketUtils.send_message_to_multiple_writers(response, game.writers)

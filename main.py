@@ -39,7 +39,8 @@ MESSAGES = {
     20: echo_message,
     60: echo_message,
     32: handle_StartGameMessage,
-    35: handle_DieMessage
+    35: handle_DieMessage,
+    40: handle_RematchRequestMessage
 }
 
 async def handle_connection(reader, writer):
@@ -129,11 +130,6 @@ async def handle_connection(reader, writer):
         await writer.wait_closed()
         print(f"Connection with {addr} closed.")
 
-async def updateWorld():
-    while True:
-        await gameManager.update()
-        await asyncio.sleep(0.0333)
-
 async def updateWaitingRooms():
     while True:
         await privateGameManager.update()
@@ -147,7 +143,6 @@ async def updateMatchmaking():
 async def main():
     server = await asyncio.start_server(handle_connection, '0.0.0.0', 5050)
 
-    asyncio.create_task(updateWorld())
     asyncio.create_task(updateWaitingRooms())
     asyncio.create_task(updateMatchmaking())
 

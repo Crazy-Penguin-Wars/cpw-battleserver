@@ -7,7 +7,7 @@ async def handle_ConnectMessage_MatchMaker(reader, writer, message):
     if message["game_type"] == 1: # Normal game
         # Request player data from main server
         url = "http://127.0.0.1:5055/get-player-data"
-        params = {"key": message["key"]}
+        params = {"id": message["id"]}
 
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params) as response:
@@ -71,14 +71,13 @@ async def handle_ConnectMessage_BattleServer(reader, writer, message):
                 print("Joining created game")
                 writer.game = game
                 game.writers.append(writer)
-                break
-    return {
-    "t" : 21,
-    "id": message["id"],
-    "map": "test_level",
-    "battle_time": game.matchTime,
-    "turn_time": game.turnTime,
-    "seed": game.seed,
-    "practice_mode": False,
-    "players": game.players
-}
+                return {
+                    "t" : 21,
+                    "id": message["id"],
+                    "map": "test_level",
+                    "battle_time": game.matchTime,
+                    "turn_time": game.turnTime,
+                    "seed": game.seed,
+                    "practice_mode": False,
+                    "players": game.players
+                }
