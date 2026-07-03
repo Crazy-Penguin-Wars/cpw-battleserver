@@ -96,7 +96,7 @@ async def update():
         settings["next_player_count_update"] = current_time + 60
 
         async with aiohttp.ClientSession() as session:
-            async with session.get("http://127.0.0.1:5055/status") as response:
+            async with session.get("http://127.0.0.1:8000/status") as response:
                 data = await response.json()
 
         settings["estimated_player_count"] = data["estimated_online_player_count"]

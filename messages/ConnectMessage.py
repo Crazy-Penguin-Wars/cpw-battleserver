@@ -6,7 +6,7 @@ import findGameManager
 async def handle_ConnectMessage_MatchMaker(reader, writer, message):
     if message["game_type"] == 1: # Normal game
         # Request player data from main server
-        url = "http://127.0.0.1:5055/get-player-data"
+        url = "http://127.0.0.1:8000/get-player-data"
         params = {"id": message["id"]}
 
         async with aiohttp.ClientSession() as session:

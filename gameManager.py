@@ -220,7 +220,7 @@ class Game:
     async def send_rewards_to_main_server(self):
         rewards_string = json.dumps(self.rewards)
         rewards_base64 = base64.urlsafe_b64encode(rewards_string.encode("utf-8")).decode("utf-8")
-        url = "http://127.0.0.1:5055/update-rewards"
+        url = "http://127.0.0.1:8000/update-rewards"
         params = {
             "rewards": rewards_base64,
             "connectionKey": os.environ["CONNECTION_KEY"]
