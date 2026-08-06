@@ -6,8 +6,7 @@ import gameManager
 from messages import *
 import privateGameManager
 import socketUtils
-
-XOR_KEY = [30,62,21,119,49,75,39,120,47,85,96,92,96,85,37,85,87,72,98,99,20,64,85,57,106,42,16,92,52,17,65,84,124,114,20,17,99,111,42,43,93,116,24,49,92,62,22,30,51,108,36,92,122,50,83,40,119,59,72,107,75,27,102,40,33,97,9,33,72,124,96,93,50,93,93,117,38,35,2,101,27,35,62,15,109,111,66,57,46,11,68,32,4,105,74,31,94,33,104,66,108,103,12,97,106,81,84,47,104,15,40,81,51,110,11,108,19,122,59,59,80,126,42,101,29,57,1,118,102,89,62,67,14,25,69,111,125,59,94,111,117,32,115,64,26,68,86,106,78,98,54,63,119,6,27,114,66,2,61,55,36,10,18,72,15,73,7,83,114,27,123,37,121,80,26,121,76,59,108,4,6,79,64,96,94,92,25,106,36,99,104,111,62,108,83,19,57,59,82,111,109,81,31,48,44,69,68,94,9,4,51,74,102,15,40,7,25,46,75,87,69,116,15,11,95,57,85,121,26,96,50,10,0,64,44,114,121,103,37,31,50,34,60,117,22,97,107,21,47,80,30,5,82,50,61,35,96,83,49,123,72,62,0,92,87,111,26,86,46,23,105,66,40,126,103,50,79,85,115,105,91,39,88,93,17,16,61,33,74,108,45,91,83,121,69,101,73,75,126,51,98,19,65,32,54,119,76,1,126,43,31,77,113,107,37,60,91,47,117,18,43,100,18,13,28,79,94,104,28,47,47,34,24,14,23,119,117,45,2,31,15,111,116,24,79,19]
+from config import MAX_FRAME_BYTES, READ_TIMEOUT_SECONDS, SERVER_HOST, SERVER_PORT, XOR_KEY
 
 CROSS_DOMAIN_POLICY = (
     '<?xml version="1.0"?>'
@@ -18,29 +17,36 @@ CROSS_DOMAIN_POLICY = (
 )
 
 MESSAGES = {
-    29: handle_ConnectMessage_MatchMaker,
-    26: handle_ConnectMessage_BattleServer,
-    15: handle_ClientReadyMessage,
-    8: echo_message,
-    14: handle_HistoryMessage,
-    7: echo_message,
-    13: echo_message,
-    3: echo_message,
-    12: echo_message,
-    11: echo_message,
-    10: handle_FireMessage,
-    2: echo_message,
-    9: echo_message,
-    6: echo_message,
-    4: echo_message,
-    5: echo_message,
-    18: echo_message,
-    33: echo_message,
-    20: echo_message,
-    60: echo_message,
-    32: handle_StartGameMessage,
-    35: handle_DieMessage,
-    40: handle_RematchRequestMessage
+    29: handle_ConnectMessage_MatchMaker, # ConnectMessage
+    26: handle_ConnectMessage_BattleServer, # ConnectMessage
+    15: handle_ClientReadyMessage, # ClientReady
+    8: echo_message, # WalkMode
+    14: handle_HistoryMessage, # History
+    7: echo_message, # Move
+    13: echo_message, # UseEmoticon
+    3: echo_message, # Stop
+    12: echo_message, # AimMode
+    11: echo_message, # FireMode
+    10: handle_FireMessage, # FireMessage
+    2: echo_message, # Aim
+    9: echo_message, # Emit
+    6: echo_message, # ChangeWeapon
+    4: echo_message, # Jump
+    5: echo_message, # JumpFinished
+    18: echo_message, # PurchaseMessage
+    33: echo_message, # ChatMessage
+    20: echo_message, # EndGameConfirmMessage
+    60: echo_message, # ChickeningOut
+    32: handle_StartGameMessage, # StartGame
+    35: handle_DieMessage, # Die
+    40: handle_RematchRequestMessage # RematchRequest
+    # To-do:
+    # 34: UseBooster
+    # 36: AddBooster
+    # 55: SimpleScript
+    # 28: ChangeSettings
+    # 37: EnableBoosters
+    # 50: IngameBet
 }
 
 async def handle_connection(reader, writer):
@@ -48,7 +54,7 @@ async def handle_connection(reader, writer):
     print(f"Connection from {addr}")
     try:
         # Read some bytes, enough to cover policy or length prefix
-        peek_data = await asyncio.wait_for(reader.read(1024), timeout=5)
+        peek_data = await asyncio.wait_for(reader.read(1024), timeout=READ_TIMEOUT_SECONDS)
         if not peek_data:
             print(f"No data received from {addr}")
             return
@@ -75,7 +81,7 @@ async def handle_connection(reader, writer):
         while True:
             # Need to read length prefix (4 bytes)
             while len(buffer) < 4:
-                more = await reader.read(4096)
+                more = await asyncio.wait_for(reader.read(4096), timeout=READ_TIMEOUT_SECONDS)
                 if not more:
                     print(f"Connection closed by {addr}")
                     return
@@ -83,10 +89,13 @@ async def handle_connection(reader, writer):
 
             length = int.from_bytes(buffer[0:4], byteorder='big')
             buffer = buffer[4:]
+            if length <= 0 or length > MAX_FRAME_BYTES:
+                print(f"Invalid frame length from {addr}: {length}")
+                return
 
             # Read full encrypted message
             while len(buffer) < length:
-                more = await reader.read(4096)
+                more = await asyncio.wait_for(reader.read(4096), timeout=READ_TIMEOUT_SECONDS)
                 if not more:
                     print(f"Connection closed by {addr} (incomplete message)")
                     return
@@ -100,9 +109,9 @@ async def handle_connection(reader, writer):
                 b ^ XOR_KEY[i % len(XOR_KEY)] for i, b in enumerate(encrypted_msg)
             )
             message = json.loads(decrypted_bytes.decode('utf-8'))
-            print(f"Decrypted message from {addr}: {message}")
-
-            message = json.loads(decrypted_bytes.decode('utf-8'))
+            if not isinstance(message, dict) or not isinstance(message.get("t"), int):
+                print(f"Invalid message shape from {addr}")
+                continue
             if message["t"] in MESSAGES:
                 handler = MESSAGES[message["t"]]
                 response = await handler(reader, writer, message)
@@ -125,7 +134,17 @@ async def handle_connection(reader, writer):
 
     except asyncio.TimeoutError:
         print(f"Timeout waiting for data from {addr}")
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        print(f"Invalid message from {addr}: {exc}")
+    except Exception as exc:
+        print(f"Connection handler failed for {addr}: {exc}")
     finally:
+        game = getattr(writer, "game", None)
+        if game is not None and writer in game.writers:
+            await game.disconnectPlayer(writer)
+        else:
+            await findGameManager.disconnect_writer(writer)
+            await privateGameManager.disconnect_writer(writer)
         writer.close()
         await writer.wait_closed()
         print(f"Connection with {addr} closed.")
@@ -141,13 +160,13 @@ async def updateMatchmaking():
         await asyncio.sleep(1)
 
 async def main():
-    server = await asyncio.start_server(handle_connection, '0.0.0.0', 5050)
+    server = await asyncio.start_server(handle_connection, SERVER_HOST, SERVER_PORT)
 
     asyncio.create_task(updateWaitingRooms())
     asyncio.create_task(updateMatchmaking())
 
     async with server:
-        print("TCP server running on port 5050")
+        print(f"TCP server running on {SERVER_HOST}:{SERVER_PORT}")
         await server.serve_forever()
 
 asyncio.run(main())

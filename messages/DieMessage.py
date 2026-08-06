@@ -2,6 +2,8 @@ import time
 import socketUtils
 
 async def handle_DieMessage(reader, writer, message):
+    if getattr(writer, "game", None) is None or message.get("id") != writer.userId:
+        return
     die_time = time.time() * 1000
     respawn_time = die_time + 5000 # "TimeToRespawn" in config
     resume_time = die_time + 5000 # "TimeToResume" in config

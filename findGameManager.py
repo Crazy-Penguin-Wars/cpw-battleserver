@@ -5,6 +5,15 @@ import time
 
 import gameManager
 import socketUtils
+from config import (
+    DEFAULT_BATTLE_TIME_SECONDS,
+    DEFAULT_TURN_TIME_SECONDS,
+    HTTP_TIMEOUT_SECONDS,
+    MAIN_SERVER_URL,
+    MAX_PLAYERS_PER_GAME,
+    PUBLIC_HOST,
+    SERVER_PORT,
+)
 
 waiting_players = []
 waiting_rooms = []
@@ -40,8 +49,8 @@ class WaitingRoom:
     async def start_game(self):
         print("Creating game")
 
-        battle_time = random.randint(1, 1) * 60
-        turn_time = random.randint(10, 30)
+        battle_time = DEFAULT_BATTLE_TIME_SECONDS
+        turn_time = DEFAULT_TURN_TIME_SECONDS
         seed = random.randint(-2147483648, 2147483647)
 
         all_players = [x.player for x in self.players]
@@ -51,8 +60,8 @@ class WaitingRoom:
         gameManager.active_games.append(game)
 
         message = {"t": 27,
-                   "host": "127.0.0.1",
-                   "port": 5050,
+                   "host": PUBLIC_HOST,
+                   "port": SERVER_PORT,
                    "map": "test_level",
                    "battle_time": battle_time,
                    "turn_time": turn_time,
@@ -61,32 +70,43 @@ class WaitingRoom:
                    "players": all_players}
         await socketUtils.send_message_to_multiple_writers(message, self.writers)
 
-        for player in self.players:
-            waiting_players.remove(player)
-        waiting_rooms.remove(self)
+        for player in list(self.players):
+            if player in waiting_players:
+                waiting_players.remove(player)
+        if self in waiting_rooms:
+            waiting_rooms.remove(self)
 
     async def disconnectPlayer(self, writer):
         id = writer.userId
         if len(self.players) == 1:
             # Destroy room
-            waiting_rooms.remove(self)
+            if self in waiting_rooms:
+                waiting_rooms.remove(self)
             return
 
-        for player in self.players:
+        for player in list(self.players):
             if player.player["id"] == id:
                 self.players.remove(player)
-                waiting_players.remove(player)
+                if player in waiting_players:
+                    waiting_players.remove(player)
 
                 if self.first_player == player:
                     self.first_player = self.players[0]
                 break
 
-        self.writers.remove(writer)
+        if writer in self.writers:
+            self.writers.remove(writer)
 
 
 def add_new_player_to_matchmaking(player, writer):
+    if any(waiting_player.writer is writer for waiting_player in waiting_players):
+        return
     new_player = WaitingPlayer(writer, player)
     waiting_players.append(new_player)
+
+
+def is_level_compatible(player_level, room_level, accepted_range):
+    return room_level - accepted_range <= player_level <= room_level + accepted_range
 
 
 async def update():
@@ -95,8 +115,10 @@ async def update():
     if current_time >= settings["next_player_count_update"]:
         settings["next_player_count_update"] = current_time + 60
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get("http://127.0.0.1:8000/status") as response:
+        timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"{MAIN_SERVER_URL}/status") as response:
+                response.raise_for_status()
                 data = await response.json()
 
         settings["estimated_player_count"] = data["estimated_online_player_count"]
@@ -122,17 +144,18 @@ async def update():
             settings["accept_level_range"] = 15
 
     # Start matchmaking
-    for player in waiting_players:
+    for player in list(waiting_players):
         level = player.player["level"]
         if player.waiting_room == None:
             # Check if waiting room to join already exists
             waiting_room_found = False
-            for waiting_room in waiting_rooms:
+            for waiting_room in list(waiting_rooms):
                 if waiting_room_found:
                     break
                 for room_player in waiting_room.players:
-                    if room_player.player["level"] >= level - settings["accept_level_range"] or\
-                       room_player.player["level"] <= level + settings["accept_level_range"]:
+                    if is_level_compatible(
+                        level, room_player.player["level"], settings["accept_level_range"]
+                    ):
                         waiting_room_found = True
                         waiting_room.players.append(player)
                         waiting_room.writers.append(player.writer)
@@ -146,14 +169,24 @@ async def update():
                 waiting_rooms.append(player.waiting_room)
 
     # Loop all waiting rooms to check which ones are full or should be started because of the time limit
-    for waiting_room in waiting_rooms:
-        for writer in waiting_room.writers:
+    for waiting_room in list(waiting_rooms):
+        for writer in list(waiting_room.writers):
             if writer.is_closing():
                 await waiting_room.disconnectPlayer(writer)
 
-        if len(waiting_room.players) == 4:
+        if len(waiting_room.players) >= MAX_PLAYERS_PER_GAME:
             await waiting_room.start_game()
             continue
+
+
+async def disconnect_writer(writer):
+    """Remove a disconnected writer from matchmaking, including unassigned players."""
+    for player in list(waiting_players):
+        if player.writer is writer:
+            if player.waiting_room is not None:
+                await player.waiting_room.disconnectPlayer(writer)
+            elif player in waiting_players:
+                waiting_players.remove(player)
 
         start_time = waiting_room.first_player.waiting_start_time + \
             settings["minimum_waiting_time"] + waiting_room.extra_waiting_time

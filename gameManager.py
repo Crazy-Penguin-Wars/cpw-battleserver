@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import socketUtils
 import time
 import base64
+from config import HTTP_TIMEOUT_SECONDS, MAIN_SERVER_URL
 
 load_dotenv()
 
@@ -24,7 +25,7 @@ class Game:
         self.writers = []
 
         self.players = players
-        self.playersActive = players
+        self.playersActive = list(players)
         self.playerOrder = []
         self.currentPlayerTurn = 0
         self.disconnectingQueue = []
@@ -98,6 +99,8 @@ class Game:
         print("Disconnecting player " + userId)
 
         # Remove player from writers
+        if writer not in self.writers:
+            return
         self.writers.remove(writer)
 
         if self.amountRealPlayersActive == 1:
@@ -121,7 +124,7 @@ class Game:
 
         for player in self.playersActive:
             if player["id"] == userId:
-                del player
+                self.playersActive.remove(player)
                 break
 
         # Game still active
@@ -170,6 +173,8 @@ class Game:
         self.resumeQueue.append(player)
 
     async def requestRematch(self, id):
+        if id not in self.pendingClients or id in self.readyClients:
+            return
         self.readyClients.append(id)
         self.pendingClients.remove(id)
         message = {"t" : 41, "id": id, "ready_clients": self.readyClients, "pending_clients": self.pendingClients, "left_clients": self.leftClients, "start": False, "game_identifier": ""}
@@ -220,27 +225,29 @@ class Game:
     async def send_rewards_to_main_server(self):
         rewards_string = json.dumps(self.rewards)
         rewards_base64 = base64.urlsafe_b64encode(rewards_string.encode("utf-8")).decode("utf-8")
-        url = "http://127.0.0.1:8000/update-rewards"
+        url = f"{MAIN_SERVER_URL}/update-rewards"
         params = {
             "rewards": rewards_base64,
             "connectionKey": os.environ["CONNECTION_KEY"]
         }
-        async with aiohttp.ClientSession() as session:
-            await session.post(url, params=params)
+        timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, params=params) as response:
+                response.raise_for_status()
 
 async def update(game):
     response = {"t": 1}
 
     # Check for inactive players
     if game.gameStarted:
-        for writer in game.writers:
+        for writer in list(game.writers):
             if writer.is_closing():
                 await game.disconnectPlayer(writer)
     
 
     # Check disconnectionQueue
     if len(game.disconnectingQueue) != 0 and game.playersReady == game.amountRealPlayersActive:
-        for disconnecting_player in game.disconnectingQueue:
+        for disconnecting_player in list(game.disconnectingQueue):
             # Send RemovePlayer
             disconnectMessage = {"t": 22, "removed_client": disconnecting_player, "reason": "disconnected"}
             await socketUtils.send_message_to_multiple_writers(disconnectMessage, game.writers) 
@@ -254,14 +261,14 @@ async def update(game):
     game.lastWorldUpdate = current_time
 
     # Check respawnQueue
-    for respawning_player in game.respawnQueue:
+    for respawning_player in list(game.respawnQueue):
         if respawning_player["respawn_time"] < current_time:
             if "respawn" not in response:
                 response["respawn"] = []
             response["respawn"].append(respawning_player)
             game.respawnQueue.remove(respawning_player)
 
-    for resuming_player in game.resumeQueue:
+    for resuming_player in list(game.resumeQueue):
         if resuming_player["resume_time"] < current_time:
             if "resume" not in response:
                 response["resume"] = []
@@ -301,6 +308,7 @@ async def update(game):
                     game.add_position_bonus_reward(player["id"], sorted_players)
             # Send rewards to the main server (where they'll be added to the database)
             await game.send_rewards_to_main_server()
+            active_games.remove(game)
             return
 
         elif game.turnTimeLeft <= 0:

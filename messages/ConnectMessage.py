@@ -2,15 +2,23 @@ import aiohttp
 import gameManager
 import privateGameManager
 import findGameManager
+from config import HTTP_TIMEOUT_SECONDS, MAIN_SERVER_URL
+
+def is_valid_player_id(value):
+    return isinstance(value, str) and 0 < len(value) <= 128
 
 async def handle_ConnectMessage_MatchMaker(reader, writer, message):
+    if not is_valid_player_id(message.get("id")):
+        return {"t": 31, "id": message.get("id", ""), "successful": False}
     if message["game_type"] == 1: # Normal game
         # Request player data from main server
-        url = "http://127.0.0.1:8000/get-player-data"
+        url = f"{MAIN_SERVER_URL}/get-player-data"
         params = {"id": message["id"]}
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, params=params) as response:
+                response.raise_for_status()
                 player = await response.json()
 
         findGameManager.add_new_player_to_matchmaking(player, writer)
@@ -23,7 +31,7 @@ async def handle_ConnectMessage_MatchMaker(reader, writer, message):
             extra_number += 1
 
         player = {
-                    "id": "sgid_04010210b1e184bc",
+                    "id": message["id"],
                     "name": "Michielvde",
                     "level": 10,
                     "clothes": [],
@@ -39,7 +47,7 @@ async def handle_ConnectMessage_MatchMaker(reader, writer, message):
             "id": message["id"],
             "successful": True,
             "players": [player],
-            "owner": "sgid_04010210b1e184bc"
+            "owner": writer.userId
         }
     
     elif message["game_type"] == 2 and not message["owner"]: # Private game, join
@@ -53,21 +61,28 @@ async def handle_ConnectMessage_MatchMaker(reader, writer, message):
             }
         writer.waiting_room = waiting_room
         writer.userId = message["id"]
-        await waiting_room.join(writer, {
-                    "id": "sgid_2",
+        joined = await waiting_room.join(writer, {
+                    "id": writer.userId,
                     "name": "Test",
                     "level": 10,
                     "clothes": [],
                     "worn_items": []
                 }
         )
+        if not joined:
+            return {"t": 31, "id": writer.userId, "successful": False}
+        return {"t": 31, "id": writer.userId, "successful": True}
 
 
 async def handle_ConnectMessage_BattleServer(reader, writer, message):
+    if not is_valid_player_id(message.get("id")):
+        return None
     writer.userId = message["id"]
     for game in gameManager.active_games:
         for player in game.players:
             if player["id"] == message["id"]:
+                if any(getattr(existing_writer, "userId", None) == writer.userId for existing_writer in game.writers):
+                    return None
                 print("Joining created game")
                 writer.game = game
                 game.writers.append(writer)
