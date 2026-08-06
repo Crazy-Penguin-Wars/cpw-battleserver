@@ -6,7 +6,7 @@ import gameManager
 from messages import *
 import privateGameManager
 import socketUtils
-from config import MAX_FRAME_BYTES, READ_TIMEOUT_SECONDS, SERVER_HOST, SERVER_PORT, XOR_KEY
+from config import MAX_FRAME_BYTES, READ_TIMEOUT_SECONDS, SERVER_HOST, ONLINE_PORT, XOR_KEY
 
 CROSS_DOMAIN_POLICY = (
     '<?xml version="1.0"?>'
@@ -160,13 +160,13 @@ async def updateMatchmaking():
         await asyncio.sleep(1)
 
 async def main():
-    server = await asyncio.start_server(handle_connection, SERVER_HOST, SERVER_PORT)
+    server = await asyncio.start_server(handle_connection, SERVER_HOST, ONLINE_PORT)
 
     asyncio.create_task(updateWaitingRooms())
     asyncio.create_task(updateMatchmaking())
 
     async with server:
-        print(f"TCP server running on {SERVER_HOST}:{SERVER_PORT}")
+        print(f"TCP server running on {SERVER_HOST}:{ONLINE_PORT}")
         await server.serve_forever()
 
 asyncio.run(main())
