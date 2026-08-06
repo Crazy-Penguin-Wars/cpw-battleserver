@@ -5,8 +5,8 @@ import random
 from config import (
     DEFAULT_BATTLE_TIME_SECONDS,
     DEFAULT_TURN_TIME_SECONDS,
-    PUBLIC_HOST,
-    SERVER_PORT,
+    ONLINE_URL,
+    ONLINE_PORT,
 )
 
 waiting_rooms = []
@@ -67,8 +67,8 @@ class PrivateWaitingRoom:
         gameManager.active_games.append(game)
         message = {
             "t": 27,
-            "host": PUBLIC_HOST,
-            "port": SERVER_PORT,
+            "host": ONLINE_URL,
+            "port": ONLINE_PORT,
             "map": self.map or "test_level",
             "battle_time": game.matchTime,
             "turn_time": game.turnTime,

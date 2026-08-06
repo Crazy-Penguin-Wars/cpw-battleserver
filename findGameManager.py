@@ -11,8 +11,8 @@ from config import (
     HTTP_TIMEOUT_SECONDS,
     MAIN_SERVER_URL,
     MAX_PLAYERS_PER_GAME,
-    PUBLIC_HOST,
-    SERVER_PORT,
+    ONLINE_URL,
+    ONLINE_PORT,
 )
 
 waiting_players = []
@@ -60,8 +60,8 @@ class WaitingRoom:
         gameManager.active_games.append(game)
 
         message = {"t": 27,
-                   "host": PUBLIC_HOST,
-                   "port": SERVER_PORT,
+                   "host": ONLINE_URL,
+                   "port": ONLINE_PORT,
                    "map": "test_level",
                    "battle_time": battle_time,
                    "turn_time": turn_time,
