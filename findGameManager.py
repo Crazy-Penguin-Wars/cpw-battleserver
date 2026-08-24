@@ -1,4 +1,3 @@
-import os
 import aiohttp
 import random
 import uuid
