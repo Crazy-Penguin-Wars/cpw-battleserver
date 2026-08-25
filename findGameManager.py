@@ -178,19 +178,17 @@ async def update():
             await waiting_room.start_game()
             continue
 
+        start_time = waiting_room.first_player.waiting_start_time + \
+            settings["minimum_waiting_time"] + waiting_room.extra_waiting_time
+        if current_time >= start_time and len(waiting_room.players) > 1:
+            await waiting_room.start_game()
+            continue
+
 
 async def disconnect_writer(writer):
-    """Remove a disconnected writer from matchmaking, including unassigned players."""
     for player in list(waiting_players):
         if player.writer is writer:
             if player.waiting_room is not None:
                 await player.waiting_room.disconnectPlayer(writer)
             elif player in waiting_players:
                 waiting_players.remove(player)
-
-        start_time = waiting_room.first_player.waiting_start_time + \
-            settings["minimum_waiting_time"] + waiting_room.extra_waiting_time
-        print(start_time - current_time)
-        if current_time >= start_time and len(waiting_room.players) > 1:
-            await waiting_room.start_game()
-            continue
