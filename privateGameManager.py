@@ -3,8 +3,6 @@ from config import MAX_PLAYERS_PER_GAME
 import gameManager
 import random
 from config import (
-    DEFAULT_BATTLE_TIME_SECONDS,
-    DEFAULT_TURN_TIME_SECONDS,
     ONLINE_URL,
     ONLINE_PORT,
 )
@@ -60,8 +58,8 @@ class PrivateWaitingRoom:
         random.shuffle(players)
         game = gameManager.Game(
             players,
-            DEFAULT_BATTLE_TIME_SECONDS,
-            DEFAULT_TURN_TIME_SECONDS,
+            random.randint(1, 1) * 60,
+            random.randint(10, 30),
             random.randint(-2147483648, 2147483647),
         )
         gameManager.active_games.append(game)

@@ -6,8 +6,6 @@ import time
 import gameManager
 import socketUtils
 from config import (
-    DEFAULT_BATTLE_TIME_SECONDS,
-    DEFAULT_TURN_TIME_SECONDS,
     HTTP_TIMEOUT_SECONDS,
     MAIN_SERVER_URL,
     MAX_PLAYERS_PER_GAME,
@@ -49,8 +47,8 @@ class WaitingRoom:
     async def start_game(self):
         print("Creating game")
 
-        battle_time = DEFAULT_BATTLE_TIME_SECONDS
-        turn_time = DEFAULT_TURN_TIME_SECONDS
+        battle_time = random.randint(1, 1) * 60
+        turn_time = random.randint(10, 30)
         seed = random.randint(-2147483648, 2147483647)
 
         all_players = [x.player for x in self.players]

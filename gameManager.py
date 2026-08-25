@@ -132,11 +132,13 @@ class Game:
             # Start next turn if needed
             next_turn_needed = False
             if self.playerOrder[self.currentPlayerTurn] == userId:
-                self.currentPlayerTurn = (self.currentPlayerTurn + 1) % self.amountAllPlayersActive
+                next_index = (self.currentPlayerTurn + 1) % len(self.playerOrder)
+                current_turn_id = self.playerOrder[next_index]
                 next_turn_needed = True
+            else:
+                current_turn_id = self.playerOrder[self.currentPlayerTurn]
 
             # Remove player from active players
-            current_turn_id = self.playerOrder[self.currentPlayerTurn]
             self.playerOrder.remove(userId)
             # Be sure that the currently active player didn't change
             self.currentPlayerTurn = self.playerOrder.index(current_turn_id)

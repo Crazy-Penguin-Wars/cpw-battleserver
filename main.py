@@ -6,7 +6,7 @@ import gameManager
 from messages import *
 import privateGameManager
 import socketUtils
-from config import MAX_FRAME_BYTES, READ_TIMEOUT_SECONDS, SERVER_HOST, ONLINE_PORT, XOR_KEY
+from config import MAX_FRAME_BYTES, READ_TIMEOUT_SECONDS, ONLINE_PORT, XOR_KEY
 
 CROSS_DOMAIN_POLICY = (
     '<?xml version="1.0"?>'
@@ -81,7 +81,7 @@ async def handle_connection(reader, writer):
         while True:
             # Need to read length prefix (4 bytes)
             while len(buffer) < 4:
-                more = await asyncio.wait_for(reader.read(4096), timeout=READ_TIMEOUT_SECONDS)
+                more = await reader.read(4096)
                 if not more:
                     print(f"Connection closed by {addr}")
                     return
@@ -95,7 +95,7 @@ async def handle_connection(reader, writer):
 
             # Read full encrypted message
             while len(buffer) < length:
-                more = await asyncio.wait_for(reader.read(4096), timeout=READ_TIMEOUT_SECONDS)
+                more = await reader.read(4096)
                 if not more:
                     print(f"Connection closed by {addr} (incomplete message)")
                     return
@@ -112,6 +112,7 @@ async def handle_connection(reader, writer):
             if not isinstance(message, dict) or not isinstance(message.get("t"), int):
                 print(f"Invalid message shape from {addr}")
                 continue
+            print("Decrypted message: " + json.dumps(message))
             if message["t"] in MESSAGES:
                 handler = MESSAGES[message["t"]]
                 response = await handler(reader, writer, message)
@@ -160,13 +161,13 @@ async def updateMatchmaking():
         await asyncio.sleep(1)
 
 async def main():
-    server = await asyncio.start_server(handle_connection, SERVER_HOST, ONLINE_PORT)
+    server = await asyncio.start_server(handle_connection, "0.0.0.0", ONLINE_PORT)
 
     asyncio.create_task(updateWaitingRooms())
     asyncio.create_task(updateMatchmaking())
 
     async with server:
-        print(f"TCP server running on {SERVER_HOST}:{ONLINE_PORT}")
+        print(f"TCP server running on 0.0.0.0:{ONLINE_PORT}")
         await server.serve_forever()
 
 asyncio.run(main())

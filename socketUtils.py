@@ -14,8 +14,24 @@ def xor_encrypt(message_bytes):
 async def send_message_to_multiple_writers(message, writers):
     if message["t"] != 1:
         print("Send message " + json.dumps(message))
+
+    message_str = json.dumps(message)
+    message_bytes = message_str.encode('utf-8')
+    # XOR encrypt
+    encrypted_bytes = xor_encrypt(message_bytes)
+    if len(encrypted_bytes) > MAX_FRAME_BYTES:
+        raise ValueError("Refusing to send an oversized frame")
+    # Prefix with 4-byte length
+    length_prefix = struct.pack('>I', len(encrypted_bytes))  # big-endian unsigned int
+    frame = length_prefix + encrypted_bytes
+
+    async def write_to(writer):
+        if not writer.is_closing():
+            writer.write(frame)
+            await writer.drain()
+
     await asyncio.gather(
-        *(send_message(message, writer) for writer in list(writers)),
+        *(write_to(writer) for writer in list(writers)),
         return_exceptions=True,
     )
 
